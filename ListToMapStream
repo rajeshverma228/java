@@ -1,0 +1,82 @@
+package com.example.fungible.service;
+
+import java.util.*;
+import java.util.stream.Collectors;
+
+import org.springframework.cache.annotation.CachePut;
+import org.springframework.cache.annotation.Cacheable;
+import org.springframework.stereotype.Service;
+
+import com.example.fungible.model.Fungible;
+import com.example.fungible.repository.FungibleRepository;
+
+@Service
+public class FungibleServiceImpl implements FungibleService {
+
+    private final FungibleRepository repository;
+
+    public FungibleServiceImpl(FungibleRepository repository) {
+        this.repository = repository;
+    }
+
+    /**
+     * Build and cache a Map<securityId, List<fungibleId>>.
+     */
+    @Override
+    @Cacheable(value = "fungibleCache")
+    public Map<String, List<String>> getAllFungible() {
+        System.out.println("Fetching from DB (not cache)...");
+        List<Fungible> fungibles = repository.findAll();
+
+        return fungibles.stream()
+                .collect(Collectors.groupingBy(
+                        Fungible::getSecurityId,
+                        Collectors.mapping(Fungible::getFungibleId, Collectors.toList())
+                ));
+    }
+
+    /**
+     * Get list of fungibleIds by securityId.
+     * If not found in cache, try DB and update the cache.
+     */
+    @Override
+    public List<String> getBySecurityId(String securityId) {
+        // Step 1: Try cached map
+        Map<String, List<String>> fungibleMap = getAllFungible();
+        List<String> cachedList = fungibleMap.get(securityId);
+
+        // Step 2: If found in cache, return
+        if (cachedList != null && !cachedList.isEmpty()) {
+            return cachedList;
+        }
+
+        // Step 3: If not found, query DB
+        System.out.println("Not found in cache. Querying DB...");
+        List<Fungible> fromDb = repository.findBySecurityId(securityId);
+
+        if (!fromDb.isEmpty()) {
+            // Step 4: Extract IDs and update cache
+            List<String> newIds = fromDb.stream()
+                    .map(Fungible::getFungibleId)
+                    .collect(Collectors.toList());
+
+            System.out.println("Found in DB. Updating cache...");
+            updateCache(fungibleMap, securityId, newIds);
+            return newIds;
+        }
+
+        // Step 5: Nothing found
+        return Collections.emptyList();
+    }
+
+    /**
+     * @CachePut will refresh the cache with the updated map.
+     */
+    @CachePut(value = "fungibleCache")
+    public Map<String, List<String>> updateCache(Map<String, List<String>> oldMap,
+                                                 String newKey,
+                                                 List<String> newValue) {
+        oldMap.put(newKey, newValue);
+        return oldMap;
+    }
+}
